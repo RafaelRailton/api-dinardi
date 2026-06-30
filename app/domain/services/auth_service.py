@@ -42,6 +42,7 @@ class AuthService:
             setor_nome=setor.nome,
             formulario_opcoes_concluido=bool(senha_row.formulario_opcoes_concluido),
             formulario_preferencias_concluido=bool(senha_row.formulario_preferencias_concluido),
+            formulario_cultura_concluido=bool(senha_row.formulario_cultura_concluido),
         )
 
     async def get_respondent_status(self, session: AsyncSession, senha_id: int) -> RespondentSession:
@@ -67,6 +68,7 @@ class AuthService:
             setor_nome=setor.nome,
             formulario_opcoes_concluido=bool(senha_row.formulario_opcoes_concluido),
             formulario_preferencias_concluido=bool(senha_row.formulario_preferencias_concluido),
+            formulario_cultura_concluido=bool(senha_row.formulario_cultura_concluido),
         )
 
     async def login_admin(self, payload: AdminLoginRequest) -> AdminSession:

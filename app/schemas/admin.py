@@ -15,8 +15,10 @@ class SetorDashboard(BaseModel):
     total_usuarios: int
     respostas_opcoes: int
     respostas_preferencias: int
+    respostas_cultura: int = 0
     pendentes_opcoes: int
     pendentes_preferencias: int
+    pendentes_cultura: int = 0
 
 
 class DashboardResponse(BaseModel):
@@ -24,6 +26,7 @@ class DashboardResponse(BaseModel):
     total_usuarios: int
     total_respostas_opcoes: int
     total_respostas_preferencias: int
+    total_respostas_cultura: int = 0
 
 
 class RespondenteLog(BaseModel):
@@ -33,14 +36,18 @@ class RespondenteLog(BaseModel):
     formulario_opcoes_concluido_em: str | None = None
     formulario_preferencias_concluido: bool
     formulario_preferencias_concluido_em: str | None = None
+    formulario_cultura_concluido: bool = False
+    formulario_cultura_concluido_em: str | None = None
 
 
 class CriarUsuarioRequest(BaseModel):
     nome: str
     cpf: str
-    setor_id: int
+    setor_id: int | None = None
     funcao: str | None = None
     matricula: str | None = None
+    data_contratacao: str | None = None
+    unidade: str | None = None
 
     @field_validator("cpf")
     @classmethod
@@ -48,3 +55,15 @@ class CriarUsuarioRequest(BaseModel):
         if not is_valid_cpf(v):
             raise ValueError("CPF invalido")
         return v
+
+
+class CulturaAgregadoPerfil(BaseModel):
+    perfil: str
+    nome: str
+    atual: float
+
+
+class CulturaAgregadoResponse(BaseModel):
+    total_respondentes: int
+    scores_medios: list[CulturaAgregadoPerfil]
+    perfil_dominante_atual: str

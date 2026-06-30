@@ -20,3 +20,12 @@ class PerguntaPreferenciaRead(BaseModel):
     opcoes: list[dict[str, Any]]
     peso: int
     ordem: int
+
+
+class PerguntaCulturaRead(BaseModel):
+    id: str
+    categoria: str
+    pergunta: str
+    tipo: str
+    opcoes: list[dict[str, Any]]
+    ordem: int

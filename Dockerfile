@@ -10,6 +10,7 @@ COPY app ./app
 COPY alembic.ini .
 COPY alembic/ ./alembic/
 COPY scripts ./scripts
+COPY ["ListadeFunc15062026 Pesquisa Cultura.xlsx", "./"]
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir . && \

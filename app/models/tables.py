@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -32,8 +32,10 @@ class Senha(Base):
     )
     formulario_opcoes_concluido: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     formulario_preferencias_concluido: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    formulario_cultura_concluido: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     formulario_opcoes_concluido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     formulario_preferencias_concluido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    formulario_cultura_concluido_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     setor: Mapped[Setor] = relationship(back_populates="senhas")
@@ -106,8 +108,11 @@ class Usuario(Base):
     cpf: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     funcao: Mapped[str | None] = mapped_column(Text)
     setor: Mapped[str | None] = mapped_column(Text)
-    setor_id: Mapped[int] = mapped_column(ForeignKey("public.setores.id", ondelete="RESTRICT"))
+    setor_id: Mapped[int | None] = mapped_column(ForeignKey("public.setores.id", ondelete="RESTRICT"), nullable=True)
     matricula: Mapped[str | None] = mapped_column(Text)
+    data_contratacao: Mapped[date | None] = mapped_column(Date)
+    unidade: Mapped[str | None] = mapped_column(Text)
+    sexo: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     setor_rel: Mapped["Setor"] = relationship()
@@ -127,3 +132,32 @@ class ProgressoRespondente(Base):
     pergunta_atual: Mapped[int] = mapped_column(Integer, default=0)
     concluido: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PerguntaCultura(Base):
+    __tablename__ = "perguntas_cultura"
+    __table_args__ = {"schema": "public"}
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    categoria: Mapped[str] = mapped_column(Text, nullable=False)
+    pergunta: Mapped[str] = mapped_column(Text, nullable=False)
+    tipo: Mapped[str] = mapped_column(Text, nullable=False)
+    opcoes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    ordem: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class RespostaCultura(Base):
+    __tablename__ = "respostas_cultura"
+    __table_args__ = (
+        UniqueConstraint("senha_id", "pergunta_id", name="respostas_cultura_unique_resposta"),
+        {"schema": "public"},
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    senha_id: Mapped[int] = mapped_column(ForeignKey("public.senhas.id", ondelete="CASCADE"))
+    setor_id: Mapped[int] = mapped_column(ForeignKey("public.setores.id", ondelete="CASCADE"))
+    pergunta_id: Mapped[str] = mapped_column(
+        ForeignKey("public.perguntas_cultura.id", ondelete="RESTRICT")
+    )
+    resposta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    data_resposta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())

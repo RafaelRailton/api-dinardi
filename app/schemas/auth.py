@@ -22,6 +22,7 @@ class RespondentSession(BaseModel):
     setor_nome: str
     formulario_opcoes_concluido: bool
     formulario_preferencias_concluido: bool
+    formulario_cultura_concluido: bool = False
 
 
 class AdminLoginRequest(BaseModel):

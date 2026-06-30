@@ -34,6 +34,19 @@ def import_excel(path: str) -> list[dict]:
         setor = (row[4] or "").strip()
         matricula = str(int(row[0])) if row[0] is not None else None
 
+        dt_admissao = None
+        if row[5] is not None:
+            from datetime import datetime, date
+            if isinstance(row[5], datetime):
+                dt_admissao = row[5].date()
+            elif isinstance(row[5], date):
+                dt_admissao = row[5]
+            else:
+                dt_admissao = datetime.strptime(str(row[5]), "%Y-%m-%d").date()
+
+        unidade = str(int(row[6])) if row[6] is not None else None
+        sexo = str(row[10]).strip() if row[10] is not None else None
+
         if not cpf or not nome:
             continue
 
@@ -43,6 +56,9 @@ def import_excel(path: str) -> list[dict]:
             "funcao": funcao,
             "setor": setor,
             "matricula": matricula,
+            "data_contratacao": dt_admissao,
+            "unidade": unidade,
+            "sexo": sexo,
         })
 
     return rows
@@ -55,20 +71,51 @@ async def run(path: str) -> None:
 
     inserted = 0
     skipped = 0
+    setores_cache: dict[str, int] = {}
     async with engine.begin() as conn:
         for f in funcionarios:
+            setor_id = None
+            if f["setor"]:
+                setor_nome = f["setor"]
+                setor_id = setores_cache.get(setor_nome)
+                if setor_id is None:
+                    setor_result = await conn.execute(
+                        text("""
+                            INSERT INTO public.setores (nome)
+                            VALUES (:nome)
+                            ON CONFLICT (nome) DO UPDATE SET nome = EXCLUDED.nome
+                            RETURNING id
+                        """),
+                        {"nome": setor_nome},
+                    )
+                    setor_id = setor_result.scalar_one()
+                    setores_cache[setor_nome] = setor_id
+
             result = await conn.execute(
                 text("""
-                    INSERT INTO public.usuarios (nome, cpf, funcao, setor, matricula)
-                    VALUES (:nome, :cpf, :funcao, :setor, :matricula)
+                    INSERT INTO public.usuarios (nome, cpf, funcao, setor, setor_id, matricula, data_contratacao, unidade, sexo)
+                    VALUES (:nome, :cpf, :funcao, :setor, :setor_id, :matricula, :data_contratacao, :unidade, :sexo)
                     ON CONFLICT (cpf) DO UPDATE SET
                         nome = EXCLUDED.nome,
                         funcao = EXCLUDED.funcao,
                         setor = EXCLUDED.setor,
-                        matricula = EXCLUDED.matricula
+                        setor_id = EXCLUDED.setor_id,
+                        matricula = EXCLUDED.matricula,
+                        data_contratacao = EXCLUDED.data_contratacao,
+                        unidade = EXCLUDED.unidade,
+                        sexo = EXCLUDED.sexo
                 """),
-                f,
+                {**f, "setor_id": setor_id},
             )
+            if setor_id is not None:
+                await conn.execute(
+                    text("""
+                        UPDATE public.senhas
+                        SET setor_id = :setor_id
+                        WHERE senha = :cpf
+                    """),
+                    {"setor_id": setor_id, "cpf": f["cpf"]},
+                )
             if result.rowcount > 0:
                 inserted += 1
             else:

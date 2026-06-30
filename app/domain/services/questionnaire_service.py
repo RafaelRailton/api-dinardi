@@ -6,20 +6,28 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tables import (
+    PerguntaCultura,
     PerguntaOpcao,
     PerguntaPreferencia,
+    RespostaCultura,
     RespostaOpcao,
     RespostaPreferencia,
     Senha,
 )
-from app.schemas.questions import PerguntaOpcaoRead, PerguntaPreferenciaRead
+from app.schemas.questions import PerguntaCulturaRead, PerguntaOpcaoRead, PerguntaPreferenciaRead
 from app.schemas.responses import (
+    CulturaPerfilScore,
+    CulturaRespostaSalva,
+    CulturaResultadoResponse,
+    CulturaSubmitRequest,
+    CulturaSubmitResponse,
     FormularioSubmitResponse,
     OpcaoSubmitRequest,
     PreferenciaClassificacaoSubmitRequest,
     PreferenciaPesoInput,
     PreferenciaPesosSubmitRequest,
 )
+from app.utils.sanitize import sanitize_cultura_resposta, sanitize_int, sanitize_str
 
 
 class QuestionnaireService:
@@ -72,7 +80,7 @@ class QuestionnaireService:
                 "senha_id": payload.senha_id,
                 "setor_id": payload.setor_id,
                 "pergunta_id": item.pergunta_id,
-                "resposta": item.resposta,
+                "resposta": sanitize_int(item.resposta, 0),
                 "data_resposta": item.data_resposta or now,
             }
             for item in payload.respostas
@@ -137,36 +145,34 @@ class QuestionnaireService:
         payload: PreferenciaClassificacaoSubmitRequest,
     ) -> FormularioSubmitResponse:
         await self._ensure_senha_belongs_to_setor(session, payload.senha_id, payload.setor_id)
-        pergunta_ids = await self._get_question_ids(session, PerguntaPreferencia)
-        self._ensure_known_questions(set(payload.mais20), pergunta_ids)
-        self._ensure_known_questions(set(payload.mais10), pergunta_ids)
-        self._ensure_known_questions(set(payload.menos20), pergunta_ids)
-        self._ensure_known_questions(set(payload.menos10), pergunta_ids)
+        all_ids = await self._get_question_ids(session, PerguntaPreferencia)
 
-        if not set(payload.mais10).issubset(set(payload.mais20)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="As 10 mais importantes precisam estar dentro das 20 mais importantes",
-            )
-        if not set(payload.menos10).issubset(set(payload.menos20)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="As 10 menos importantes precisam estar dentro das 20 menos importantes",
-            )
+        all_submitted = set()
+        for ids in payload.rounds:
+            all_submitted.update(ids)
+        self._ensure_known_questions(all_submitted, all_ids)
 
-        weights = {pergunta_id: 3 for pergunta_id in pergunta_ids}
-        for pergunta_id in payload.mais20:
-            weights[pergunta_id] = 4
-        for pergunta_id in payload.mais10:
-            weights[pergunta_id] = 5
-        for pergunta_id in payload.menos20:
-            weights[pergunta_id] = 2 if weights[pergunta_id] == 3 else 0
-        for pergunta_id in payload.menos10:
-            weights[pergunta_id] = 1 if weights[pergunta_id] == 2 else 0
+        weights: dict[str, int] = {pid: 3 for pid in all_ids}
+
+        for pid in payload.rounds[0]:
+            if pid in weights:
+                weights[pid] = 4
+
+        for pid in payload.rounds[1]:
+            if pid in weights:
+                weights[pid] = 5
+
+        for pid in payload.rounds[2]:
+            if pid in weights:
+                weights[pid] = 0 if weights[pid] != 3 else 2
+
+        for pid in payload.rounds[3]:
+            if pid in weights:
+                weights[pid] = 0 if weights[pid] == 0 else 1
 
         respostas = [
-            PreferenciaPesoInput(pergunta_id=pergunta_id, resposta=peso)
-            for pergunta_id, peso in weights.items()
+            PreferenciaPesoInput(pergunta_id=pid, resposta=peso)
+            for pid, peso in weights.items()
         ]
         return await self._persist_preference_rows(session, payload.senha_id, payload.setor_id, respostas)
 
@@ -183,7 +189,7 @@ class QuestionnaireService:
                 "senha_id": senha_id,
                 "setor_id": setor_id,
                 "pergunta_id": item.pergunta_id,
-                "resposta": str(item.resposta),
+                "resposta": sanitize_str(str(item.resposta), "0"),
                 "data_resposta": item.data_resposta or now,
             }
             for item in respostas
@@ -225,6 +231,263 @@ class QuestionnaireService:
             total_respostas=saved_count,
             concluido=True,
         )
+
+    async def list_cultura(self, session: AsyncSession) -> list[PerguntaCulturaRead]:
+        rows = (
+            await session.execute(select(PerguntaCultura).order_by(PerguntaCultura.ordem))
+        ).scalars().all()
+        return [
+            PerguntaCulturaRead(
+                id=row.id,
+                categoria=row.categoria,
+                pergunta=row.pergunta,
+                tipo=row.tipo,
+                opcoes=row.opcoes,
+                ordem=row.ordem,
+            )
+            for row in rows
+        ]
+
+    async def get_cultura_respostas(
+        self,
+        session: AsyncSession,
+        senha_id: int,
+    ) -> list[CulturaRespostaSalva]:
+        rows = (
+            await session.execute(
+                select(RespostaCultura).where(RespostaCultura.senha_id == senha_id)
+            )
+        ).scalars().all()
+        return [
+            CulturaRespostaSalva(
+                pergunta_id=row.pergunta_id,
+                resposta=row.resposta,
+                data_resposta=row.data_resposta,
+            )
+            for row in rows
+        ]
+
+    async def salvar_resposta_cultura(
+        self,
+        session: AsyncSession,
+        senha_id: int,
+        setor_id: int,
+        pergunta_id: str,
+        resposta: dict,
+    ) -> None:
+        formatted = sanitize_cultura_resposta(resposta)
+
+        stmt = insert(RespostaCultura).values(
+            senha_id=senha_id,
+            setor_id=setor_id,
+            pergunta_id=pergunta_id,
+            resposta=formatted,
+            data_resposta=datetime.now(timezone.utc),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["senha_id", "pergunta_id"],
+            set_={
+                "setor_id": stmt.excluded.setor_id,
+                "resposta": stmt.excluded.resposta,
+                "data_resposta": stmt.excluded.data_resposta,
+            },
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+    async def submit_cultura(
+        self,
+        session: AsyncSession,
+        payload: CulturaSubmitRequest,
+    ) -> CulturaSubmitResponse:
+        await self._ensure_senha_belongs_to_setor(session, payload.senha_id, payload.setor_id)
+        pergunta_ids = await self._get_question_ids(session, PerguntaCultura)
+        received_ids = {item.pergunta_id for item in payload.respostas}
+        self._ensure_known_questions(received_ids, pergunta_ids)
+
+        if received_ids != pergunta_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Formulario de cultura incompleto: todas as 6 perguntas devem ser respondidas",
+            )
+
+        now = datetime.now(timezone.utc)
+        rows = [
+            {
+                "senha_id": payload.senha_id,
+                "setor_id": payload.setor_id,
+                "pergunta_id": item.pergunta_id,
+                "resposta": sanitize_cultura_resposta({
+                    codigo: {"atual": val.atual}
+                    for codigo, val in item.resposta.items()
+                }),
+                "data_resposta": item.data_resposta or now,
+            }
+            for item in payload.respostas
+        ]
+
+        stmt = insert(RespostaCultura).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["senha_id", "pergunta_id"],
+            set_={
+                "setor_id": stmt.excluded.setor_id,
+                "resposta": stmt.excluded.resposta,
+                "data_resposta": stmt.excluded.data_resposta,
+            },
+        )
+        await session.execute(stmt)
+
+        saved_count = await self._count_saved_answers(session, RespostaCultura, payload.senha_id)
+        if saved_count < len(pergunta_ids):
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Formulario de cultura incompleto",
+            )
+
+        await session.execute(
+            update(Senha)
+            .where(Senha.id == payload.senha_id)
+            .values(
+                formulario_cultura_concluido=True,
+                formulario_cultura_concluido_em=now,
+            )
+        )
+        await session.commit()
+
+        resultado = await self.calculate_cultura_result(session, payload.senha_id)
+
+        return CulturaSubmitResponse(
+            senha_id=payload.senha_id,
+            formulario="cultura",
+            total_respostas=saved_count,
+            concluido=True,
+            resultado=resultado,
+        )
+
+    async def calculate_cultura_result(
+        self,
+        session: AsyncSession,
+        senha_id: int,
+    ) -> CulturaResultadoResponse:
+        respostas = (
+            await session.execute(
+                select(RespostaCultura).where(RespostaCultura.senha_id == senha_id)
+            )
+        ).scalars().all()
+
+        if not respostas:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Nenhuma resposta de cultura encontrada para esta senha",
+            )
+
+        perfil_map = {
+            "A": "colaborar",
+            "B": "criar",
+            "C": "competir",
+            "D": "controlar",
+        }
+        perfil_nomes = {
+            "colaborar": "Colaborar",
+            "criar": "Criar",
+            "competir": "Competir",
+            "controlar": "Controlar",
+        }
+
+        somas = {
+            "colaborar": 0,
+            "criar": 0,
+            "competir": 0,
+            "controlar": 0,
+        }
+
+        for resposta in respostas:
+            for codigo, perfil in perfil_map.items():
+                valores = resposta.resposta.get(codigo, {})
+                somas[perfil] += valores.get("atual", 0)
+
+        n = len(respostas)
+        scores: list[CulturaPerfilScore] = []
+        for perfil in ["colaborar", "criar", "competir", "controlar"]:
+            atual = round(somas[perfil] / n, 2)
+            scores.append(CulturaPerfilScore(
+                perfil=perfil,
+                nome=perfil_nomes[perfil],
+                atual=atual,
+            ))
+
+        dominante_atual = max(scores, key=lambda s: s.atual).perfil
+
+        return CulturaResultadoResponse(
+            senha_id=senha_id,
+            scores=scores,
+            perfil_dominante_atual=dominante_atual,
+        )
+
+    async def aggregate_cultura_results(
+        self,
+        session: AsyncSession,
+        setor_id: int | None = None,
+    ) -> dict:
+        stmt = select(RespostaCultura)
+        if setor_id is not None:
+            stmt = stmt.join(Senha, RespostaCultura.senha_id == Senha.id).where(
+                Senha.setor_id == setor_id
+            )
+        respostas = (await session.execute(stmt)).scalars().all()
+
+        if not respostas:
+            return {
+                "total_respondentes": 0,
+                "scores_medios": [],
+                "perfil_dominante_atual": "",
+            }
+
+        senha_ids = list(set(r.senha_id for r in respostas))
+        n_respondentes = len(senha_ids)
+
+        perfil_map = {
+            "A": "colaborar",
+            "B": "criar",
+            "C": "competir",
+            "D": "controlar",
+        }
+        perfil_nomes = {
+            "colaborar": "Colaborar",
+            "criar": "Criar",
+            "competir": "Competir",
+            "controlar": "Controlar",
+        }
+
+        totals = {
+            "colaborar": 0.0,
+            "criar": 0.0,
+            "competir": 0.0,
+            "controlar": 0.0,
+        }
+
+        for resposta in respostas:
+            for codigo, perfil in perfil_map.items():
+                valores = resposta.resposta.get(codigo, {})
+                totals[perfil] += valores.get("atual", 0)
+
+        scores = []
+        for perfil in ["colaborar", "criar", "competir", "controlar"]:
+            atual = round(totals[perfil] / n_respondentes, 2) if n_respondentes else 0
+            scores.append({
+                "perfil": perfil,
+                "nome": perfil_nomes[perfil],
+                "atual": atual,
+            })
+
+        dominante_atual = max(scores, key=lambda s: s["atual"])["perfil"] if scores else ""
+
+        return {
+            "total_respondentes": n_respondentes,
+            "scores_medios": scores,
+            "perfil_dominante_atual": dominante_atual,
+        }
 
     async def _ensure_senha_belongs_to_setor(
         self,

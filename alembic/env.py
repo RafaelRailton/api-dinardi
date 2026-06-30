@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import settings
 from app.models.base import Base
-from app.models.tables import PerguntaOpcao, PerguntaPreferencia, ProgressoRespondente
-from app.models.tables import RespostaOpcao, RespostaPreferencia, Senha, Setor, Usuario
+from app.models.tables import PerguntaCultura, PerguntaOpcao, PerguntaPreferencia, ProgressoRespondente
+from app.models.tables import RespostaCultura, RespostaOpcao, RespostaPreferencia, Senha, Setor, Usuario
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
